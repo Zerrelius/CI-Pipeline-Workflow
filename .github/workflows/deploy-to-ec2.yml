@@ -339,30 +339,30 @@ jobs:
           
           # Nginx Site konfigurieren (mit korrekter Here-Doc Syntax)
           sudo bash -c 'cat > /etc/nginx/sites-available/ci-pipeline-workflow << "NGINX_EOF"
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    
-    root /var/www/ci-pipeline-workflow;
-    index index.html index.htm;
-    
-    server_name _;
-    
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-    
-    # Gzip compression
-    gzip on;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-    
-    # Cache static assets
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-    }
-}
-NGINX_EOF'
+        server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+
+          root /var/www/ci-pipeline-workflow;
+          index index.html index.htm;
+
+          server_name _;
+
+          location / {
+              try_files $uri $uri/ /index.html;
+          }
+
+          # Gzip compression
+          gzip on;
+          gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+          # Cache static assets
+          location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+              expires 1y;
+              add_header Cache-Control "public, immutable";
+          }
+        }
+        NGINX_EOF'
           
           # Site aktivieren
           sudo ln -sf /etc/nginx/sites-available/ci-pipeline-workflow /etc/nginx/sites-enabled/
@@ -394,7 +394,7 @@ NGINX_EOF'
             ls -la /tmp/
           fi
           
-OUTER_EOF
+        OUTER_EOF
 
     - name: Restart web server
       env:
