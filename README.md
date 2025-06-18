@@ -78,3 +78,69 @@ npm run dev
 - **Pipeline Fails:** Prüfen Sie GitHub Actions Logs
 - **AWS Permissions:** Stellen Sie sicher, dass IAM User alle nötigen Rechte hat
 - **SSH Connection:** Warten Sie bis EC2 Instance vollständig gestartet ist
+
+___
+
+## Reflexions Fragen
+
+● Beschreibe die Rolle jedes Jobs in deiner Pipeline (ci_build, infra_provision,
+app_deploy) und wie die Abhängigkeiten (needs) sicherstellen, dass sie in der
+richtigen Reihenfolge ausgeführt werden.
+ci_build baut und testet meine Anwendung
+infra_provision stellt meine AWS Infrastruktur bereit und oder aktualisiert sie
+app_deploy deployet meine Anwendung auf der entsprechend vorher erstellten Infrastruktur
+ci_build -> infra_provision -> app_deploay sind so in entsprechender Reihenfolge von einander abhängig.
+infra_provision braucht ci_build um sicher zu stellen das der Build erfolgreich deployed werden kann weil er entsprechend getestet wurde
+app_deploy braucht infra_provision um entsprechend vorher die Infrastruktur zu garantieren die benötigt wird für den Build
+
+● Wie wurde das Artefakt (Frontend Build) vom CI-Job an den Deployment-Job
+übergeben? Warum ist dies notwendig?
+Es wurde im Dist Ordner hochgeladen und entsprechend später wieder runtergeladen in Form von Artefakten.
+So läuft jeder Job in einer seperaten VM.
+Jobs können immer wieder neu durchlaufen werden.
+Es ist dadurch persistent und auch vorhanden obwohl ein Job bereits beendet wurde und ein neuer beginnt.
+Es ist durch das Artefakt reproduzierbar und kann immer wieder neu auf einem System ausgeführt werden.
+Artefakte können außerdem so heruntergeladen und inspiziert werden.
+
+● Wie wurden sensible Daten (AWS Credentials, SSH Private Key) sicher in GitHub
+Actions gespeichert und im Workflow genutzt? Warum sind diese Methoden besser
+als das Hinterlegen im Code oder in unverschlüsselten Dateien?
+Mithilfe von Secrets für die AWS Credentials und einem Dynamischen SSH Key der generiert wird.
+Der SSH Key wird zu einem temporären Artefakt.
+Die Secrets sind verschlüsselt und entsprechend sicher gespeichert auf GitHub, dadurch nur von Repository-Mitgliedern entsprechend erreichbar.
+In den Logs werden die Werte außerdem nur mit *** Gekennzeichnet.
+Der dynamische SSH-Key kann somit in einer Pipeline neu generiert werden und nur dann einmal vverwendet werden. Sie existieren nur während des Workflows.
+
+Im Code wären sie unsicher gespeichert, von jedem einsichtbar und könnten daher schnell missbraucht werden.
+
+● Beschreibe den Prozess, wie die Pipeline die öffentliche IP der EC2 Instanz ermittelt und dann das Artefakt dorthin kopiert hat.
+Mithilfe von Infra_Provision.
+Verwendet wird er dann im app_deploy.
+Übertragen wird er mithilfe einer SSH Verbindung.
+
+● Was passiert mit der von Terraform gemanagten Infrastruktur, wenn du einfach
+Code in deinem React Projekt änderst und die Pipeline erneut durchläuft (ohne das
+Destroy-Workflow auszuführen)?
+Terraform vergleicht gewünschten Zustand mit aktuellem State
+Erkennt Änderungen an bestehender Infrastruktur
+Aktualisiert nur geänderte Ressourcen
+Unveränderte Ressourcen bleiben unberührt
+
+● Welche Schritte im Deployment-Prozess (innerhalb des app_deploy Jobs) stellen
+sicher, dass die neue Version deiner React App auf der EC2 Instanz sichtbar wird?
+Alte Version entfernen:
+sudo rm -rf /var/www/ci-pipeline-workflow/*
+
+Neue Dateien installieren:
+sudo mv /tmp/* /var/www/ci-pipeline-workflow/
+sudo chown -R www-data:www-data /var/www/ci-pipeline-workflow/
+sudo chmod -R 755 /var/www/ci-pipeline-workflow/
+
+Webserver neu Laden:
+sudo nginx -t  # Konfiguration testen
+sudo systemctl reload nginx  # Graceful reload ohne Downtime
+
+Cache-Handling:
+Browser-Cache: React Build enthält Hash-basierte Dateinamen
+Nginx-Cache: Reload erneuert Server-Cache
+CDN-Cache: Würde separate Invalidierung benötigen

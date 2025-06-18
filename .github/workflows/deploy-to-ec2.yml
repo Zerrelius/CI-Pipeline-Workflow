@@ -165,24 +165,48 @@ jobs:
     - name: Setup SSH
       run: |
         chmod 600 ~/.ssh/deploy_key
+        
+        # SSH Agent starten und Key hinzufügen
         eval "$(ssh-agent -s)"
         ssh-add ~/.ssh/deploy_key
+        
+        # SSH Config für automatische Key-Verwendung
         mkdir -p ~/.ssh
-        echo "Host *" >> ~/.ssh/config
-        echo "  StrictHostKeyChecking no" >> ~/.ssh/config
-        echo "  UserKnownHostsFile=/dev/null" >> ~/.ssh/config
+        cat >> ~/.ssh/config << EOF
+        Host *
+          StrictHostKeyChecking no
+          UserKnownHostsFile=/dev/null
+          IdentityFile ~/.ssh/deploy_key
+          IdentitiesOnly yes
+        EOF
+        chmod 600 ~/.ssh/config
+        
+        # Key-Fingerprint prüfen
+        ssh-keygen -l -f ~/.ssh/deploy_key
+        ssh-keygen -l -f ~/.ssh/deploy_key.pub
 
     - name: Wait for EC2 instance to be ready
       env:
         INSTANCE_IP: ${{ needs.infra_provision.outputs.instance_ip }}
       run: |
         echo "Waiting for EC2 instance to be ready..."
+        echo "Using SSH key: ~/.ssh/deploy_key"
+        echo "Connecting to: ubuntu@$INSTANCE_IP"
+        
         for i in {1..30}; do
-          if ssh -i ~/.ssh/deploy_key -o ConnectTimeout=10 ubuntu@$INSTANCE_IP "echo 'Instance is ready'"; then
+          echo "⏳ SSH attempt $i/30..."
+          if ssh -v -i ~/.ssh/deploy_key -o ConnectTimeout=10 -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "echo 'Instance is ready'" 2>&1; then
             echo "✅ Instance is ready!"
             break
           fi
-          echo "⏳ Waiting for instance... (attempt $i/30)"
+          if [ $i -eq 30 ]; then
+            echo "❌ Failed to connect after 30 attempts"
+            echo "Debug: Checking key permissions..."
+            ls -la ~/.ssh/
+            echo "Debug: Instance status..."
+            aws ec2 describe-instances --instance-ids ${{ needs.infra_provision.outputs.instance_id }} --region ${{ secrets.AWS_REGION }}
+            exit 1
+          fi
           sleep 30
         done
 
@@ -191,10 +215,14 @@ jobs:
         INSTANCE_IP: ${{ needs.infra_provision.outputs.instance_ip }}
       run: |
         echo "📁 Copying application files to EC2..."
-        scp -i ~/.ssh/deploy_key -r ./dist/* ubuntu@$INSTANCE_IP:/tmp/
+        echo "Using key: ~/.ssh/deploy_key"
+        echo "Target: ubuntu@$INSTANCE_IP"
+        
+        # Verbose SCP für Debugging
+        scp -v -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r ./dist/* ubuntu@$INSTANCE_IP:/tmp/ 2>&1
         
         echo "🔧 Setting up files on server..."
-        ssh -i ~/.ssh/deploy_key ubuntu@$INSTANCE_IP << 'EOF'
+        ssh -v -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
           sudo rm -rf /var/www/ci-pipeline-workflow/*
           sudo mv /tmp/* /var/www/ci-pipeline-workflow/
           sudo chown -R www-data:www-data /var/www/ci-pipeline-workflow/
