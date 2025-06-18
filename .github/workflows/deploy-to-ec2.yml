@@ -269,132 +269,191 @@ jobs:
       run: |
         echo "🔧 Setting up web server and deploying application..."
         
-        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'OUTER_EOF'
-          set -e  # Stop on any error
-          
-          echo "=== Waiting for any running package operations ==="
-          
-          # Warten bis apt-get/dpkg frei ist
-          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-            echo "Waiting for apt/dpkg lock to be released..."
-            sleep 10
-          done
-          
-          while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
-            echo "Waiting for apt lists lock to be released..."
-            sleep 10
-          done
-          
-          # User Data Script abwarten (falls noch läuft)
-          while pgrep -f "apt-get\|dpkg" >/dev/null; do
-            echo "Waiting for package operations to complete..."
-            sleep 15
-          done
-          
-          echo "=== System Update and Package Installation ==="
-          
-          # System aktualisieren
-          sudo apt-get update -y
-          
-          # Nginx installieren falls nicht vorhanden
-          if ! command -v nginx &> /dev/null; then
-            echo "Installing Nginx..."
-            sudo apt-get install -y nginx
-          else
-            echo "Nginx already installed"
-          fi
-          
-          # Nginx Service aktivieren und starten
-          sudo systemctl enable nginx
-          sudo systemctl start nginx
-          
-          echo "=== Directory Setup ==="
-          
-          # Web Directory erstellen
-          TARGET_DIR="/var/www/ci-pipeline-workflow"
-          sudo mkdir -p "$TARGET_DIR"
-          
-          # Alte Dateien entfernen
-          sudo rm -rf "$TARGET_DIR"/*
-          
-          echo "=== File Deployment ==="
-          
-          # Neue Dateien von /tmp verschieben
-          if ls /tmp/*.html /tmp/*.js /tmp/*.css 2>/dev/null; then
-            sudo mv /tmp/*.html "$TARGET_DIR/" 2>/dev/null || true
-            sudo mv /tmp/*.js "$TARGET_DIR/" 2>/dev/null || true
-            sudo mv /tmp/*.css "$TARGET_DIR/" 2>/dev/null || true
-            sudo mv /tmp/*.svg "$TARGET_DIR/" 2>/dev/null || true
-          fi
-          
-          if [ -d "/tmp/assets" ]; then
-            sudo mv /tmp/assets "$TARGET_DIR/" 2>/dev/null || true
-          fi
-          
-          # Permissions setzen
-          sudo chown -R www-data:www-data "$TARGET_DIR"
-          sudo chmod -R 755 "$TARGET_DIR"
-          
-          echo "=== Nginx Configuration ==="
-          
-          # Nginx Site konfigurieren (mit korrekter Here-Doc Syntax)
-          sudo bash -c 'cat > /etc/nginx/sites-available/ci-pipeline-workflow << "NGINX_EOF"
-        server {
-          listen 80 default_server;
-          listen [::]:80 default_server;
+        # Deployment Script erstellen
+        cat > deploy_script.sh << 'DEPLOY_SCRIPT'
+        #!/bin/bash
+        set -e
 
-          root /var/www/ci-pipeline-workflow;
-          index index.html index.htm;
+        echo "=== Waiting for all package operations to complete ==="
 
-          server_name _;
-
-          location / {
-              try_files $uri $uri/ /index.html;
-          }
-
-          # Gzip compression
-          gzip on;
-          gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-
-          # Cache static assets
-          location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
-              expires 1y;
-              add_header Cache-Control "public, immutable";
-          }
+        # Funktion für robustes Warten
+        wait_for_apt_lock() {
+            local max_wait=600  # 10 Minuten maximum
+            local waited=0
+            
+            while [ $waited -lt $max_wait ]; do
+                # Prüfe alle möglichen Locks
+                if ! sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && \
+                   ! sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 && \
+                   ! sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 && \
+                   ! pgrep -f "apt-get|dpkg|unattended-upgrade" >/dev/null; then
+                    echo "✅ All package operations completed"
+                    return 0
+                fi
+                
+                echo "⏳ Waiting for package operations... (${waited}s/${max_wait}s)"
+                sleep 15
+                waited=$((waited + 15))
+            done
+            
+            echo "❌ Timeout waiting for package operations"
+            return 1
         }
-        NGINX_EOF'
-          
-          # Site aktivieren
-          sudo ln -sf /etc/nginx/sites-available/ci-pipeline-workflow /etc/nginx/sites-enabled/
-          sudo rm -f /etc/nginx/sites-enabled/default
-          
-          # Nginx Konfiguration testen
-          sudo nginx -t
-          
-          # Nginx neu laden
-          sudo systemctl reload nginx
-          
-          echo "=== Deployment Verification ==="
-          
-          # Status prüfen
-          sudo systemctl status nginx --no-pager
-          
-          # Deployed files anzeigen
-          echo "Deployed files:"
-          ls -la "$TARGET_DIR"
-          
-          # Test ob index.html existiert
-          if [ -f "$TARGET_DIR/index.html" ]; then
-            echo "✅ index.html deployed successfully"
-          else
-            echo "❌ index.html not found"
-            echo "Files in target directory:"
-            ls -la "$TARGET_DIR"
+
+        # Warten auf APT Lock
+        wait_for_apt_lock
+
+        # Zusätzliche Sicherheit: Cloud-init Status prüfen
+        echo "=== Checking cloud-init status ==="
+        if command -v cloud-init >/dev/null; then
+            sudo cloud-init status --wait || echo "Cloud-init wait failed, continuing..."
+        fi
+
+        echo "=== Package Installation ==="
+        # APT mit Retry-Logik
+        install_with_retry() {
+            local package=$1
+            local max_attempts=3
+            local attempt=1
+            
+            while [ $attempt -le $max_attempts ]; do
+                echo "Installing $package (attempt $attempt/$max_attempts)"
+                if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y $package; then
+                    echo "✅ $package installed successfully"
+                    return 0
+                else
+                    echo "❌ Failed to install $package (attempt $attempt)"
+                    if [ $attempt -lt $max_attempts ]; then
+                        echo "Waiting before retry..."
+                        sleep 30
+                        # APT Cache bereinigen
+                        sudo apt-get clean
+                        sudo apt-get update
+                    fi
+                    attempt=$((attempt + 1))
+                fi
+            done
+            
+            echo "❌ Failed to install $package after $max_attempts attempts"
+            return 1
+        }
+
+        # System Update
+        sudo apt-get update -y
+
+        # Nginx installieren falls nicht vorhanden
+        if ! command -v nginx &> /dev/null; then
+            install_with_retry nginx
+        else
+            echo "✅ Nginx already installed"
+        fi
+
+        echo "=== Nginx Service Setup ==="
+        sudo systemctl enable nginx
+        sudo systemctl start nginx || sudo systemctl restart nginx
+
+        echo "=== Application Deployment ==="
+        TARGET_DIR="/var/www/ci-pipeline-workflow"
+        sudo mkdir -p "$TARGET_DIR"
+        sudo rm -rf "$TARGET_DIR"/*
+
+        # Files deployen
+        echo "Deploying files from /tmp..."
+        file_count=0
+
+        # HTML files
+        for file in /tmp/*.html; do
+            if [ -f "$file" ]; then
+                sudo mv "$file" "$TARGET_DIR/"
+                file_count=$((file_count + 1))
+            fi
+        done
+
+        # JS files
+        for file in /tmp/*.js; do
+            if [ -f "$file" ]; then
+                sudo mv "$file" "$TARGET_DIR/"
+                file_count=$((file_count + 1))
+            fi
+        done
+
+        # CSS files
+        for file in /tmp/*.css; do
+            if [ -f "$file" ]; then
+                sudo mv "$file" "$TARGET_DIR/"
+                file_count=$((file_count + 1))
+            fi
+        done
+
+        # SVG files
+        for file in /tmp/*.svg; do
+            if [ -f "$file" ]; then
+                sudo mv "$file" "$TARGET_DIR/"
+                file_count=$((file_count + 1))
+            fi
+        done
+
+        # Assets directory
+        if [ -d "/tmp/assets" ]; then
+            sudo mv /tmp/assets "$TARGET_DIR/"
+            file_count=$((file_count + 1))
+        fi
+
+        echo "Deployed $file_count files/directories"
+
+        # Permissions
+        sudo chown -R www-data:www-data "$TARGET_DIR"
+        sudo chmod -R 755 "$TARGET_DIR"
+
+        echo "=== Nginx Configuration ==="
+        # Nginx Config erstellen
+        sudo tee /etc/nginx/sites-available/default > /dev/null << 'NGINX_CONFIG'
+        server {
+            listen 80 default_server;
+            listen [::]:80 default_server;
+            
+            root /var/www/ci-pipeline-workflow;
+            index index.html;
+            
+            server_name _;
+            
+            location / {
+                try_files $uri $uri/ /index.html;
+            }
+            
+            gzip on;
+            gzip_types text/plain text/css application/json application/javascript;
+        }
+        NGINX_CONFIG
+
+        # Nginx testen und neustarten
+        sudo nginx -t
+        sudo systemctl reload nginx
+
+        echo "=== Final Verification ==="
+        sudo systemctl status nginx --no-pager
+        echo "Files in target directory:"
+        ls -la "$TARGET_DIR"
+
+        if [ -f "$TARGET_DIR/index.html" ]; then
+            echo "✅ Deployment successful - index.html found"
+        else
+            echo "❌ Deployment issue - index.html not found"
             echo "Files in /tmp:"
             ls -la /tmp/
-          fi
-          
-        OUTER_EOF
+        fi
+
+        echo "✅ Setup completed"
+        DEPLOY_SCRIPT
+
+        # Script ausführbar machen und übertragen
+        chmod +x deploy_script.sh
+        
+        echo "📤 Uploading deployment script..."
+        scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no deploy_script.sh ubuntu@$INSTANCE_IP:/tmp/
+        
+        echo "🚀 Executing deployment script..."
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "bash /tmp/deploy_script.sh"
 
     - name: Restart web server
       env:
