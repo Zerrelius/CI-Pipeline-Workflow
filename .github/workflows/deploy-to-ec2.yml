@@ -269,8 +269,27 @@ jobs:
       run: |
         echo "🔧 Setting up web server and deploying application..."
         
-        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'OUTER_EOF'
           set -e  # Stop on any error
+          
+          echo "=== Waiting for any running package operations ==="
+          
+          # Warten bis apt-get/dpkg frei ist
+          while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+            echo "Waiting for apt/dpkg lock to be released..."
+            sleep 10
+          done
+          
+          while sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+            echo "Waiting for apt lists lock to be released..."
+            sleep 10
+          done
+          
+          # User Data Script abwarten (falls noch läuft)
+          while pgrep -f "apt-get\|dpkg" >/dev/null; do
+            echo "Waiting for package operations to complete..."
+            sleep 15
+          done
           
           echo "=== System Update and Package Installation ==="
           
@@ -301,15 +320,15 @@ jobs:
           echo "=== File Deployment ==="
           
           # Neue Dateien von /tmp verschieben
-          if [ "$(ls -A /tmp/*.html /tmp/*.js /tmp/*.css /tmp/assets 2>/dev/null)" ]; then
+          if ls /tmp/*.html /tmp/*.js /tmp/*.css 2>/dev/null; then
             sudo mv /tmp/*.html "$TARGET_DIR/" 2>/dev/null || true
             sudo mv /tmp/*.js "$TARGET_DIR/" 2>/dev/null || true
             sudo mv /tmp/*.css "$TARGET_DIR/" 2>/dev/null || true
+            sudo mv /tmp/*.svg "$TARGET_DIR/" 2>/dev/null || true
+          fi
+          
+          if [ -d "/tmp/assets" ]; then
             sudo mv /tmp/assets "$TARGET_DIR/" 2>/dev/null || true
-            sudo mv /tmp/vite.svg "$TARGET_DIR/" 2>/dev/null || true
-          else
-            echo "No files found in /tmp to deploy"
-            ls -la /tmp/
           fi
           
           # Permissions setzen
@@ -318,60 +337,64 @@ jobs:
           
           echo "=== Nginx Configuration ==="
           
-          # Nginx Site konfigurieren
-          sudo tee /etc/nginx/sites-available/ci-pipeline-workflow > /dev/null << NGINX_EOF
-          server {
-              listen 80 default_server;
-              listen [::]:80 default_server;
-
-              root $TARGET_DIR;
-              index index.html index.htm;
-
-              server_name _;
-
-              location / {
-                  try_files \$uri \$uri/ /index.html;
-              }
-
-              # Gzip compression
-              gzip on;
-              gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-
-              # Cache static assets
-              location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
-                  expires 1y;
-                  add_header Cache-Control "public, immutable";
-              }
-          }
-          NGINX_EOF
-
-                    # Site aktivieren
-                    sudo ln -sf /etc/nginx/sites-available/ci-pipeline-workflow /etc/nginx/sites-enabled/
-                    sudo rm -f /etc/nginx/sites-enabled/default
-
-                    # Nginx Konfiguration testen
-                    sudo nginx -t
-
-                    # Nginx neu laden
-                    sudo systemctl reload nginx
-
-                    echo "=== Deployment Verification ==="
-
-                    # Status prüfen
-                    sudo systemctl status nginx --no-pager
-
-                    # Deployed files anzeigen
-                    echo "Deployed files:"
-                    ls -la "$TARGET_DIR"
-
-                    # Test ob index.html existiert
-                    if [ -f "$TARGET_DIR/index.html" ]; then
-                      echo "✅ index.html deployed successfully"
-                    else
-                      echo "❌ index.html not found"
-                    fi
-
-                  EOF
+          # Nginx Site konfigurieren (mit korrekter Here-Doc Syntax)
+          sudo bash -c 'cat > /etc/nginx/sites-available/ci-pipeline-workflow << "NGINX_EOF"
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    
+    root /var/www/ci-pipeline-workflow;
+    index index.html index.htm;
+    
+    server_name _;
+    
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+    
+    # Gzip compression
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+    
+    # Cache static assets
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+}
+NGINX_EOF'
+          
+          # Site aktivieren
+          sudo ln -sf /etc/nginx/sites-available/ci-pipeline-workflow /etc/nginx/sites-enabled/
+          sudo rm -f /etc/nginx/sites-enabled/default
+          
+          # Nginx Konfiguration testen
+          sudo nginx -t
+          
+          # Nginx neu laden
+          sudo systemctl reload nginx
+          
+          echo "=== Deployment Verification ==="
+          
+          # Status prüfen
+          sudo systemctl status nginx --no-pager
+          
+          # Deployed files anzeigen
+          echo "Deployed files:"
+          ls -la "$TARGET_DIR"
+          
+          # Test ob index.html existiert
+          if [ -f "$TARGET_DIR/index.html" ]; then
+            echo "✅ index.html deployed successfully"
+          else
+            echo "❌ index.html not found"
+            echo "Files in target directory:"
+            ls -la "$TARGET_DIR"
+            echo "Files in /tmp:"
+            ls -la /tmp/
+          fi
+          
+OUTER_EOF
 
     - name: Restart web server
       env:
