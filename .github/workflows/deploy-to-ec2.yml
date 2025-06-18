@@ -263,6 +263,116 @@ jobs:
           ls -la /var/www/ci-pipeline-workflow/
         EOF
 
+    - name: Setup Web Server and Deploy App
+      env:
+        INSTANCE_IP: ${{ needs.infra_provision.outputs.instance_ip }}
+      run: |
+        echo "🔧 Setting up web server and deploying application..."
+        
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
+          set -e  # Stop on any error
+          
+          echo "=== System Update and Package Installation ==="
+          
+          # System aktualisieren
+          sudo apt-get update -y
+          
+          # Nginx installieren falls nicht vorhanden
+          if ! command -v nginx &> /dev/null; then
+            echo "Installing Nginx..."
+            sudo apt-get install -y nginx
+          else
+            echo "Nginx already installed"
+          fi
+          
+          # Nginx Service aktivieren und starten
+          sudo systemctl enable nginx
+          sudo systemctl start nginx
+          
+          echo "=== Directory Setup ==="
+          
+          # Web Directory erstellen
+          TARGET_DIR="/var/www/ci-pipeline-workflow"
+          sudo mkdir -p "$TARGET_DIR"
+          
+          # Alte Dateien entfernen
+          sudo rm -rf "$TARGET_DIR"/*
+          
+          echo "=== File Deployment ==="
+          
+          # Neue Dateien von /tmp verschieben
+          if [ "$(ls -A /tmp/*.html /tmp/*.js /tmp/*.css /tmp/assets 2>/dev/null)" ]; then
+            sudo mv /tmp/*.html "$TARGET_DIR/" 2>/dev/null || true
+            sudo mv /tmp/*.js "$TARGET_DIR/" 2>/dev/null || true
+            sudo mv /tmp/*.css "$TARGET_DIR/" 2>/dev/null || true
+            sudo mv /tmp/assets "$TARGET_DIR/" 2>/dev/null || true
+            sudo mv /tmp/vite.svg "$TARGET_DIR/" 2>/dev/null || true
+          else
+            echo "No files found in /tmp to deploy"
+            ls -la /tmp/
+          fi
+          
+          # Permissions setzen
+          sudo chown -R www-data:www-data "$TARGET_DIR"
+          sudo chmod -R 755 "$TARGET_DIR"
+          
+          echo "=== Nginx Configuration ==="
+          
+          # Nginx Site konfigurieren
+          sudo tee /etc/nginx/sites-available/ci-pipeline-workflow > /dev/null << NGINX_EOF
+          server {
+              listen 80 default_server;
+              listen [::]:80 default_server;
+
+              root $TARGET_DIR;
+              index index.html index.htm;
+
+              server_name _;
+
+              location / {
+                  try_files \$uri \$uri/ /index.html;
+              }
+
+              # Gzip compression
+              gzip on;
+              gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
+
+              # Cache static assets
+              location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+                  expires 1y;
+                  add_header Cache-Control "public, immutable";
+              }
+          }
+          NGINX_EOF
+
+                    # Site aktivieren
+                    sudo ln -sf /etc/nginx/sites-available/ci-pipeline-workflow /etc/nginx/sites-enabled/
+                    sudo rm -f /etc/nginx/sites-enabled/default
+
+                    # Nginx Konfiguration testen
+                    sudo nginx -t
+
+                    # Nginx neu laden
+                    sudo systemctl reload nginx
+
+                    echo "=== Deployment Verification ==="
+
+                    # Status prüfen
+                    sudo systemctl status nginx --no-pager
+
+                    # Deployed files anzeigen
+                    echo "Deployed files:"
+                    ls -la "$TARGET_DIR"
+
+                    # Test ob index.html existiert
+                    if [ -f "$TARGET_DIR/index.html" ]; then
+                      echo "✅ index.html deployed successfully"
+                    else
+                      echo "❌ index.html not found"
+                    fi
+
+                  EOF
+
     - name: Restart web server
       env:
         INSTANCE_IP: ${{ needs.infra_provision.outputs.instance_ip }}
@@ -280,21 +390,25 @@ jobs:
       run: |
         echo "🏥 Running health checks..."
         
-        # Wait a moment for nginx to fully restart
+        # Kurz warten
         sleep 10
         
-        # Check if the website is accessible
+        # HTTP Health Check
         for i in {1..10}; do
           if curl -f -s http://$INSTANCE_IP/ > /dev/null; then
             echo "✅ Health check passed! Website is accessible."
             echo "🌐 Website URL: http://$INSTANCE_IP"
+            
+            # Response anzeigen
+            echo "=== Website Response ==="
+            curl -s http://$INSTANCE_IP/ | head -20
             break
           fi
           echo "⏳ Health check attempt $i/10..."
           sleep 10
         done
         
-        # Final verification
+        # Final status
         echo "📊 Final status check:"
         curl -I http://$INSTANCE_IP/ || echo "❌ Website not accessible"
 
