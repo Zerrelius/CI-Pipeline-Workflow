@@ -236,15 +236,31 @@ jobs:
         echo "Using key: ~/.ssh/deploy_key"
         echo "Target: ubuntu@$INSTANCE_IP"
         
-        # Verbose SCP für Debugging
+        # SCP Upload
         scp -v -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r ./dist/* ubuntu@$INSTANCE_IP:/tmp/ 2>&1
         
         echo "🔧 Setting up files on server..."
         ssh -v -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
+          # Debug: Aktuelle Verzeichnisstruktur anzeigen
+          echo "=== Current directory structure ==="
+          ls -la /var/www/
+          
+          # Zielverzeichnis erstellen falls nicht vorhanden
+          sudo mkdir -p /var/www/ci-pipeline-workflow
+          
+          # Alte Dateien entfernen (falls vorhanden)
           sudo rm -rf /var/www/ci-pipeline-workflow/*
-          sudo mv /tmp/* /var/www/ci-pipeline-workflow/
+          
+          # Neue Dateien verschieben
+          sudo mv /tmp/* /var/www/ci-pipeline-workflow/ 2>/dev/null || echo "No files in /tmp to move"
+          
+          # Ownership und Permissions setzen
           sudo chown -R www-data:www-data /var/www/ci-pipeline-workflow/
           sudo chmod -R 755 /var/www/ci-pipeline-workflow/
+          
+          # Verify installation
+          echo "=== Deployed files ==="
+          ls -la /var/www/ci-pipeline-workflow/
         EOF
 
     - name: Restart web server
