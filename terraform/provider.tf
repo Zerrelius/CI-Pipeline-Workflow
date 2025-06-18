@@ -8,7 +8,7 @@ terraform {
   }
   
   backend "s3" {
-    bucket         = "terraform-state-ci-pipeline-12345" # Ihren Bucket-Namen
+    bucket         = "terraform-state-ci-pipeline-jd-2025"
     key            = "ci-pipeline/terraform.tfstate"
     region         = "eu-central-1"
     dynamodb_table = "terraform-state-lock"
