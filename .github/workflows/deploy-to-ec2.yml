@@ -164,13 +164,26 @@ jobs:
 
     - name: Setup SSH
       run: |
-        chmod 600 ~/.ssh/deploy_key
+        # Überprüfen was vorhanden ist
+        echo "=== Available files ==="
+        ls -la ~/.ssh/
         
-        # SSH Agent starten und Key hinzufügen
+        # Public Key aus Private Key ableiten
+        if [ -f ~/.ssh/deploy_key ]; then
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key > ~/.ssh/deploy_key.pub
+          chmod 644 ~/.ssh/deploy_key.pub
+          echo "✅ Generated public key from private key"
+        else
+          echo "❌ Private key not found"
+          exit 1
+        fi
+        
+        # SSH Agent Setup
         eval "$(ssh-agent -s)"
         ssh-add ~/.ssh/deploy_key
         
-        # SSH Config für automatische Key-Verwendung
+        # SSH Config
         mkdir -p ~/.ssh
         cat >> ~/.ssh/config << EOF
         Host *
@@ -181,9 +194,14 @@ jobs:
         EOF
         chmod 600 ~/.ssh/config
         
-        # Key-Fingerprint prüfen
+        # Verify setup
+        echo "=== SSH Setup Complete ==="
+        echo "Private key:"
         ssh-keygen -l -f ~/.ssh/deploy_key
+        echo "Public key:"
         ssh-keygen -l -f ~/.ssh/deploy_key.pub
+        echo "Loaded keys in SSH agent:"
+        ssh-add -l
 
     - name: Wait for EC2 instance to be ready
       env:
