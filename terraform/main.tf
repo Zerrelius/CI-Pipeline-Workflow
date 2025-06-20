@@ -129,9 +129,10 @@ resource "aws_iam_role_policy" "ec2_s3_access" {
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:DeleteObject"
+          "s3:DeleteObject",
+          "s3:PutObject"
         ]
-        Resource = "arn:aws:s3:::${var.tf_state_bucket}/temp/*"
+        Resource = "arn:aws:s3:::*terraform-state*/temp/*"  # ← Generischer Pfad
       }
     ]
   })
