@@ -120,62 +120,55 @@ jobs:
         name: frontend-build
         path: ./dist
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ secrets.AWS_REGION }}
+    - name: Generate SSH key (matching infra)
+      run: |
+        ssh-keygen -t rsa -b 4096 -f ~/.ssh/deploy_key -N ""
+        chmod 600 ~/.ssh/deploy_key
 
     - name: Wait for instance to be ready
       env:
-        INSTANCE_ID: ${{ needs.infra_provision.outputs.instance_id }}
+        INSTANCE_IP: ${{ needs.infra_provision.outputs.instance_ip }}
       run: |
-        echo "Waiting for instance to pass status checks..."
-        aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID --region ${{ secrets.AWS_REGION }}
-        echo "Instance is ready!"
+        echo "Waiting for SSH access..."
+        for i in {1..20}; do
+          if ssh -i ~/.ssh/deploy_key -o ConnectTimeout=10 -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "echo 'SSH Ready'" 2>/dev/null; then
+            echo "✅ SSH connection successful"
+            break
+          fi
+          echo "⏳ Waiting for SSH... ($i/20)"
+          sleep 30
+        done
 
-    - name: Deploy via SSM
+    - name: Deploy application
       env:
-        INSTANCE_ID: ${{ needs.infra_provision.outputs.instance_id }}
+        INSTANCE_IP: ${{ needs.infra_provision.outputs.instance_ip }}
       run: |
-        # Dateien als Base64 für SSM übertragen
-        echo "Creating deployment package..."
-        tar -czf deployment.tar.gz -C ./dist .
+        echo "📤 Deploying application..."
         
-        # Upload via S3 (temporär)
-        aws s3 cp deployment.tar.gz s3://${{ secrets.TF_STATE_BUCKET }}/temp/deployment.tar.gz
+        # Files kopieren
+        scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -r ./dist/* ubuntu@$INSTANCE_IP:/tmp/
         
-        # Deployment via SSM
-        aws ssm send-command \
-          --instance-ids $INSTANCE_ID \
-          --document-name "AWS-RunShellScript" \
-          --parameters 'commands=[
-            "cd /tmp",
-            "aws s3 cp s3://${{ secrets.TF_STATE_BUCKET }}/temp/deployment.tar.gz .",
-            "sudo rm -rf /var/www/ci-pipeline-workflow/*",
-            "sudo tar -xzf deployment.tar.gz -C /var/www/ci-pipeline-workflow/",
-            "sudo chown -R www-data:www-data /var/www/ci-pipeline-workflow/",
-            "sudo chmod -R 755 /var/www/ci-pipeline-workflow/",
-            "sudo systemctl reload nginx",
-            "rm deployment.tar.gz",
-            "aws s3 rm s3://${{ secrets.TF_STATE_BUCKET }}/temp/deployment.tar.gz"
-          ]' \
-          --region ${{ secrets.AWS_REGION }}
+        # Installation
+        ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "
+          sudo rm -rf /var/www/ci-pipeline-workflow/*
+          sudo mv /tmp/* /var/www/ci-pipeline-workflow/ 2>/dev/null || true
+          sudo chown -R www-data:www-data /var/www/ci-pipeline-workflow/
+          sudo chmod -R 755 /var/www/ci-pipeline-workflow/
+          sudo systemctl reload nginx
+          echo '✅ Deployment completed'
+        "
 
     - name: Health Check
       env:
         INSTANCE_IP: ${{ needs.infra_provision.outputs.instance_ip }}
       run: |
-        echo "Waiting for deployment to complete..."
-        sleep 30
-        
+        sleep 10
         for i in {1..10}; do
           if curl -f -s http://$INSTANCE_IP/ > /dev/null; then
-            echo "✅ Deployment successful!"
-            echo "🌐 Website: http://$INSTANCE_IP"
+            echo "✅ Website is live: http://$INSTANCE_IP"
             break
           fi
-          echo "⏳ Waiting for website... ($i/10)"
+          echo "⏳ Health check $i/10..."
           sleep 10
         done
+        
