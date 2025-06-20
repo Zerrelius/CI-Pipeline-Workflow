@@ -71,6 +71,7 @@ jobs:
       run: |
         ssh-keygen -t rsa -b 4096 -f ~/.ssh/deploy_key -N ""
         echo "SSH_PUBLIC_KEY=$(cat ~/.ssh/deploy_key.pub)" >> $GITHUB_ENV
+        chmod 600 ~/.ssh/deploy_key
 
     - name: Terraform Init
       working-directory: ./terraform
@@ -100,13 +101,12 @@ jobs:
         echo "instance_ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
         echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
 
-    - name: Store SSH key securely
-      run: |
-        # SSH Key für aktuellen Job speichern (NICHT als Artifact!)
-        echo "${{ env.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-        chmod 600 ~/.ssh/deploy_key
-      env:
-        SSH_PRIVATE_KEY: ${{ env.SSH_PRIVATE_KEY }}
+    # - name: Store SSH key securely
+    #   run: |
+    #     # SSH Key für aktuellen Job speichern
+    #     echo "$(cat ~/.ssh/deploy_key)" > ~/.ssh/deploy_key_temp
+    #     mv ~/.ssh/deploy_key_temp ~/.ssh/deploy_key
+    #     chmod 600 ~/.ssh/deploy_key
 
   app_deploy:
     name: Deploy Application

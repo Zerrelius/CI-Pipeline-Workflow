@@ -92,8 +92,7 @@ systemctl status nginx --no-pager
 systemctl status amazon-ssm-agent --no-pager
 ls -la /var/www/${project_name}/
 
-# SSM Agent Registration prüfen
-echo "=== Checking SSM Registration ==="
-/usr/bin/amazon-ssm-agent -register -code "activation-code" -id "activation-id" -region "${var.aws_region}" || echo "SSM registration will happen automatically"
+# SSM Agent Registration wird automatisch gemacht - keine manuelle Registrierung nötig
+echo "=== SSM Agent will register automatically with IAM instance profile ==="
 
 echo "=== User Data completed successfully at $(date) ==="
