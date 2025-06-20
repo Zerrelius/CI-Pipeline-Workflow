@@ -13,11 +13,15 @@ variable "project_name" {
 variable "environment" {
   description = "Environment name"
   type        = string
-  default     = "production"
+  default     = "dev"
 }
 
 variable "ssh_public_key" {
   description = "SSH public key for EC2 access"
   type        = string
-  default     = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... your-public-key"
+}
+
+variable "tf_state_bucket" {
+  description = "S3 bucket for Terraform state"
+  type        = string
 }

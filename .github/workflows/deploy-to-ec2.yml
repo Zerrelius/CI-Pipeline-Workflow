@@ -91,6 +91,7 @@ jobs:
       env:
         TF_VAR_ssh_public_key: ${{ env.SSH_PUBLIC_KEY }}
         TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
+        TF_VAR_tf_state_bucket: ${{ secrets.TF_STATE_BUCKET }}
       run: terraform apply -auto-approve
 
     - name: Get Terraform Outputs

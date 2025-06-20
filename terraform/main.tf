@@ -88,6 +88,66 @@ resource "aws_security_group" "web" {
   }
 }
 
+# IAM Role für EC2 SSM
+resource "aws_iam_role" "ec2_ssm_role" {
+  name = "${var.project_name}-ec2-ssm-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name        = "${var.project_name}-ec2-ssm-role"
+    Environment = var.environment
+  }
+}
+
+# SSM Managed Policy attachieren
+resource "aws_iam_role_policy_attachment" "ec2_ssm_policy" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# S3 Access für Deployment
+resource "aws_iam_role_policy" "ec2_s3_access" {
+  name = "${var.project_name}-ec2-s3-policy"
+  role = aws_iam_role.ec2_ssm_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:DeleteObject"
+        ]
+        Resource = "arn:aws:s3:::${var.tf_state_bucket}/temp/*"
+      }
+    ]
+  })
+}
+
+# Instance Profile
+resource "aws_iam_instance_profile" "ec2_profile" {
+  name = "${var.project_name}-ec2-profile"
+  role = aws_iam_role.ec2_ssm_role.name
+
+  tags = {
+    Name        = "${var.project_name}-ec2-profile"
+    Environment = var.environment
+  }
+}
+
 # SSH Key Pair
 resource "aws_key_pair" "main" {
   key_name   = "${var.project_name}-key"
@@ -106,6 +166,7 @@ resource "aws_instance" "web" {
   key_name               = aws_key_pair.main.key_name
   vpc_security_group_ids = [aws_security_group.web.id]
   subnet_id              = aws_subnet.public.id
+  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
 
   user_data = base64encode(templatefile("${path.module}/user-data.sh", {
     project_name = var.project_name
