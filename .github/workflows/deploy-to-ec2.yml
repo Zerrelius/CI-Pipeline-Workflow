@@ -91,7 +91,6 @@ jobs:
       env:
         TF_VAR_ssh_public_key: ${{ env.SSH_PUBLIC_KEY }}
         TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
-        TF_VAR_tf_state_bucket: ${{ secrets.TF_STATE_BUCKET }}
       run: terraform apply -auto-approve
 
     - name: Get Terraform Outputs
@@ -136,7 +135,7 @@ jobs:
         aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID --region ${{ secrets.AWS_REGION }}
         echo "Instance is ready!"
 
-    - name: Deploy via SSM (secure, no SSH keys needed)
+    - name: Deploy via SSM
       env:
         INSTANCE_ID: ${{ needs.infra_provision.outputs.instance_id }}
       run: |

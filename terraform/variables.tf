@@ -20,8 +20,3 @@ variable "ssh_public_key" {
   description = "SSH public key for EC2 access"
   type        = string
 }
-
-variable "tf_state_bucket" {
-  description = "S3 bucket for Terraform state"
-  type        = string
-}

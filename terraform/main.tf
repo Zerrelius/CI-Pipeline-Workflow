@@ -117,7 +117,7 @@ resource "aws_iam_role_policy_attachment" "ec2_ssm_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# S3 Access für Deployment
+# S3 Access für Deployment (generisch)
 resource "aws_iam_role_policy" "ec2_s3_access" {
   name = "${var.project_name}-ec2-s3-policy"
   role = aws_iam_role.ec2_ssm_role.id
@@ -132,7 +132,11 @@ resource "aws_iam_role_policy" "ec2_s3_access" {
           "s3:DeleteObject",
           "s3:PutObject"
         ]
-        Resource = "arn:aws:s3:::*terraform-state*/temp/*"  # ← Generischer Pfad
+        Resource = [
+          "arn:aws:s3:::*terraform*/*",
+          "arn:aws:s3:::*deployment*/*", 
+          "arn:aws:s3:::*temp*/*"
+        ]
       }
     ]
   })
